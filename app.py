@@ -7,7 +7,7 @@ from titan.titan_stack import TitanStack
 
 
 app = cdk.App()
-TitanStack(app, "TitanStack",
+TitanStack(app, "titanStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
     # but a single synthesized template can be deployed anywhere.
@@ -20,7 +20,7 @@ TitanStack(app, "TitanStack",
     # Uncomment the next line if you know exactly what Account and Region you
     # want to deploy the stack to. */
 
-    env=cdk.Environment(account='138566386714', region='us-east-1'),
+    # env=cdk.Environment(account='138566386714', region='us-east-1'),
 
     # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
     )
