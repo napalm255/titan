@@ -4,13 +4,20 @@ Titan Websocker Authorizer.
 
 import json
 import logging
-import os
 
 logger = logging.getLogger()
 logger.setLevel("INFO")
 
 
 def generate_policy(principal_id, effect, resource):
+    """
+    Generate policy.
+
+    :param principal_id: Principal ID.
+    :param effect: Effect.
+    :param resource: Resource.
+    :return: Policy.
+    """
     auth_response = {}
     auth_response['principalId'] = principal_id
     auth_response['context'] = {
@@ -33,24 +40,60 @@ def generate_policy(principal_id, effect, resource):
 
 
 def generate_allow(principal_id, resource):
+    """
+    Generate allow policy.
+
+    :param principal_id: Principal ID.
+    :param resource: Resource.
+    :return: Allow policy.
+    """
     return generate_policy(principal_id, 'Allow', resource)
 
 
 def generate_deny(principal_id, resource):
+    """
+    Generate deny policy.
+
+    :param principal_id: Principal ID.
+    :param resource: Resource.
+    :return: Deny policy.
+    """
     return generate_policy(principal_id, 'Deny', resource)
 
 
-def lambda_handler(event, context):
-    logger.info(event)
-    token = "password123"
+def check_token(token):
+    """
+    Check if token is valid.
 
-    if event['headers']['Auth'] == token:
+    :param token: Token to check.
+    :return: True if token is valid, False otherwise.
+    """
+    tokens = [
+        "5236e26b-f221-4984-985c-793525ddf82b"
+    ]
+    if token in tokens:
+        return True
+    return False
+
+
+def lambda_handler(event, context):
+    """
+    Lambda handler.
+
+    :param event: Event data.
+    :param context: Context data.
+    :return: Authorizer response.
+    """
+    # pylint: disable=unused-argument
+    logger.info(event)
+
+    if check_token(event['headers']['Auth']):
         response = generate_allow('titan-agent', event['methodArn'])
         logger.info(response)
         logger.info('authorized')
         return json.loads(response)
-    else:
-        response = generate_deny('titan-agent', event['methodArn'])
-        logger.info(response)
-        logger.error('unauthorized')
-        return json.loads(response)
+
+    response = generate_deny('titan-agent', event['methodArn'])
+    logger.info(response)
+    logger.error('unauthorized')
+    return json.loads(response)

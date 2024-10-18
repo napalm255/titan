@@ -7,6 +7,9 @@ Parameters:
     Type: String
     Description: The alias of the KMS key to use for encryption
     Default: titan-agents-ddb-cmk
+  lambdaRoleName:
+    Type: String
+    Description: The name of the role to use for the Lambda function
 
 Resources:
   kmsKey:
@@ -60,6 +63,17 @@ Resources:
             Action:
               - "kms:ScheduleKeyDeletion"
               - "kms:CancelKeyDeletion"
+            Resource: "*"
+          - Sid: "Allow Lambda to use the key"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/${lambdaRoleName}
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
             Resource: "*"
 
   kmsKeyAlias:

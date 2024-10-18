@@ -23,6 +23,7 @@
         on_create_failure: DELETE
         template_parameters:
           keyAlias: "{{ agents.ddb.cmk }}"
+          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
         tags:
           application: "{{ application }}"
 
@@ -35,6 +36,7 @@
         on_create_failure: DELETE
         template_parameters:
           keyAlias: "{{ agents.ddb.cmk }}"
+          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
         tags:
           application: "{{ application }}"
       when: enableReplica | bool
@@ -143,3 +145,8 @@
       when:
         - "'s3_keys' in bucket_list"
         - item != lambda.zip
+
+    - name: display connection details
+      debug:
+        msg: |
+          {{ websocket_stack.stack_outputs.webSocketApiEndpoint }}

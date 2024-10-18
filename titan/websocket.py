@@ -13,26 +13,33 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def handle_connect(host, table, connection_id):
+def handle_connect(params, table, connection_id):
     """
     Handles new connections by adding the connection ID and user name to the
     DynamoDB table.
 
-    :param host: The name of the host that started the connection.
+    :param params: The query string parameters of the connection request.
     :param table: The DynamoDB connection table.
     :param connection_id: The websocket connection ID of the new connection.
     :return: An HTTP status code that indicates the result of adding the connection
              to the DynamoDB table.
     """
-    status_code = 200
+    status_code = 503
     try:
-        table.put_item(Item={"connection_id": connection_id, "host": host})
-        logger.info("Added connection %s for host %s.", connection_id, host)
+        table.put_item(
+            Item={
+                "connection_id": connection_id,
+                "agent": params.get('agent', 'unknown'),
+                "os": params.get('os', 'unknown'),
+                "labels": list(params.get('labels', '').split(',')),
+            }
+        )
+        logger.info("Added connection %s for agent %s.", connection_id, params)
+        status_code = 200
     except ClientError:
         logger.exception(
-            "Could not add connection %s for host %s.", connection_id, host
+            "Could not add connection %s for agent %s.", connection_id, params
         )
-        status_code = 503
     return status_code
 
 
@@ -138,19 +145,22 @@ def lambda_handler(event, context):
     :return: A response dict that contains an HTTP status code that indicates the
              result of handling the event.
     """
+    # pylint: disable=unused-argument
     table_name = os.environ["TABLE_NAME"]
+
     route_key = event.get("requestContext", {}).get("routeKey")
     connection_id = event.get("requestContext", {}).get("connectionId")
+
     if table_name is None or route_key is None or connection_id is None:
         return {"statusCode": 400}
 
     table = boto3.resource("dynamodb").Table(table_name)
     logger.info("Request: %s, use table %s.", route_key, table.name)
 
-    response = {"statusCode": 200}
+    response = {"statusCode": 404}
     if route_key == "$connect":
-        host = event.get("queryStringParameters", {"name": "guest"}).get("name")
-        response["statusCode"] = handle_connect(host, table, connection_id)
+        params = event.get("queryStringParameters")
+        response["statusCode"] = handle_connect(params, table, connection_id)
     elif route_key == "$disconnect":
         response["statusCode"] = handle_disconnect(table, connection_id)
     elif route_key == "sendmessage":
@@ -173,7 +183,5 @@ def lambda_handler(event, context):
             response["statusCode"] = handle_message(
                 table, connection_id, body, apig_management_client
             )
-    else:
-        response["statusCode"] = 404
 
     return response
