@@ -54,3 +54,17 @@
           enableReplica: "{{ enableReplica }}"
         tags:
           application: "{{ application }}"
+
+    - name: deploy websocket api
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ agents.stack.websocket }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_websocket.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          lambdaConnectName: "{{ agents.websocket.connect_lambda }}"
+          lambdaDisconnectName: "{{ agents.websocket.disconnect_lambda }}"
+          lambdaMessageName: "{{ agents.websocket.message_lambda }}"
+        tags:
+          application: "{{ application }}"

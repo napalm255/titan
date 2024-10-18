@@ -35,7 +35,6 @@ Resources:
       ApiId: !Ref webSocketApi
       IntegrationType: AWS_PROXY
       IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionConnect.Arn}/invocations
-      PayloadFormatVersion: '2.0'
 
   webSocketRouteDisconnect:
     Type: AWS::ApiGatewayV2::Route
@@ -59,7 +58,6 @@ Resources:
       ApiId: !Ref webSocketApi
       IntegrationType: AWS_PROXY
       IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionDisconnect.Arn}/invocations"
-      PayloadFormatVersion: '2.0'
 
   webSocketIntegrationMessage:
     Type: AWS::ApiGatewayV2::Integration
@@ -67,7 +65,46 @@ Resources:
       ApiId: !Ref webSocketApi
       IntegrationType: AWS_PROXY
       IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionMessage.Arn}/invocations"
-      PayloadFormatVersion: '2.0'
+
+  apiGatewayDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - webSocketRouteConnect
+      - webSocketRouteDisconnect
+      - webSocketRouteMessage
+    Properties:
+      ApiId: !Ref webSocketApi
+
+  apiGatewayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref webSocketApi
+      StageName: prod
+      DeploymentId: !Ref apiGatewayDeployment
+
+  lambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: lambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - lambda:InvokeFunction
+                Resource: "*"
 
   lambdaFunctionConnect:
     Type: AWS::Lambda::Function
@@ -113,46 +150,6 @@ Resources:
                   'statusCode': 200,
                   'body': 'Message received'
               }
-
-  lambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: lambdaExecutionRole
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: lambdaExecutionPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - lambda:InvokeFunction
-                Resource: "*"
-
-  apiGatewayDeployment:
-    Type: AWS::ApiGatewayV2::Deployment
-    DependsOn:
-      - webSocketRouteConnect
-      - webSocketRouteDisconnect
-      - webSocketRouteMessage
-    Properties:
-      ApiId: !Ref webSocketApi
-
-  apiGatewayStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref webSocketApi
-      StageName: prod
-      DeploymentId: !Ref apiGatewayDeployment
 
 Outputs:
   webSocketApiEndpoint:

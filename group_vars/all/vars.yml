@@ -14,8 +14,13 @@ agents:
     bucket: titan-agents-bucket-{{ label }}
     cmk: titan-agents-ddb-cmk-{{ label }}
     ddb: titan-agents-ddb-{{ label }}
+    websocket: titan-agents-websocket-{{ label }}
   bucket:
     name: titan-agents-bucket-{{ label }}
   ddb:
     name: titan-agents-ddb-{{ label }}
     cmk: titan-agents-ddb-cmk-{{ label }}
+  websocket:
+    connect_lambda: titan-agents-websocket-connect-{{ label }}
+    disconnect_lambda: titan-agents-websocket-disconnect-{{ label }}
+    message_lambda: titan-agents-websocket-message-{{ label }}
