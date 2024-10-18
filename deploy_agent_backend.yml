@@ -4,17 +4,15 @@
   gather_facts: false
 
   tasks:
-    - name: deploy bucket
-      amazon.aws.cloudformation:
-        region: "{{ regions[0] }}"
-        stack_name: "{{ agents.stack.bucket }}"
-        template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          bucketName: "{{ agents.bucket.name }}"
-        tags:
-          application: "{{ application }}"
+    - name: generate version
+      ansible.builtin.command: date +%Y%m%d_%H%M%S
+      register: date
+      when: not version
+
+    - name: set version
+      ansible.builtin.set_fact:
+        version: "{{ date.stdout }}"
+      when: not version
 
     - name: deploy cmk to {{ regions[0] }}
       amazon.aws.cloudformation:
@@ -55,6 +53,59 @@
         tags:
           application: "{{ application }}"
 
+    - name: deploy bucket
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ agents.stack.bucket }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          bucketName: "{{ agents.bucket.name }}"
+        tags:
+          application: "{{ application }}"
+
+    - name: reset build directory
+      ansible.builtin.file:
+        dest: "{{ build.dir }}"
+        state: "{{ item }}"
+      loop:
+        - absent
+        - directory
+
+    - name: copy lambda to build directory
+      ansible.builtin.copy:
+        src: "{{ lambda.dir }}/"
+        dest: "{{ build.dir }}"
+
+    - name: create lambda version file
+      ansible.builtin.copy:
+        content: "{{ version }}"
+        dest: "{{ build.dir }}/VERSION"
+
+    - name: package lambda
+      community.general.archive:
+        path: "{{ build.dir }}/*"
+        dest: "{{ build.dir }}/{{ lambda.zip }}"
+        format: zip
+
+    - name: list contents in bucket
+      amazon.aws.s3_object:
+        region: "{{ regions[0] }}"
+        bucket: "{{ agents.bucket.name }}"
+        mode: list
+      register: bucket_list
+      failed_when: false
+
+    - name: upload lambda package to bucket
+      amazon.aws.s3_object:
+        region: "{{ regions[0] }}"
+        bucket: "{{ agents.bucket.name }}"
+        mode: put
+        src: "{{ build.dir }}/{{ lambda.zip }}"
+        object: "{{ lambda.zip }}"
+        encrypt: true
+
     - name: deploy websocket api
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
@@ -63,8 +114,32 @@
         state: present
         on_create_failure: DELETE
         template_parameters:
-          lambdaConnectName: "{{ agents.websocket.connect_lambda }}"
-          lambdaDisconnectName: "{{ agents.websocket.disconnect_lambda }}"
-          lambdaMessageName: "{{ agents.websocket.message_lambda }}"
+          lambdaWebSocketName: "{{ agents.lambda.websocket }}"
+          lambdaWebSocketExecutionRoleName: "{{ agents.lambda.websocket_role }}"
+          lambdaAuthorizerName: "{{ agents.lambda.authorizer }}"
+          lambdaAuthorizerExecutionRoleName: "{{ agents.lambda.authorizer_role }}"
+          lambdaBucket: "{{ agents.bucket.name }}"
+          lambdaKey: "{{ lambda.zip }}"
+          dynamoDbTable: "{{ agents.ddb.name }}"
         tags:
           application: "{{ application }}"
+      register: websocket_stack
+
+    - name: create deployment for api gateway
+      ansible.builtin.command: >
+        aws apigatewayv2 create-deployment
+        --api-id "{{ websocket_stack.stack_outputs.webSocketApiId }}"
+        --stage-name prod
+      environment:
+        AWS_DEFAULT_REGION: "{{ regions[0] }}"
+
+    - name: delete old contents in bucket
+      amazon.aws.s3_object:
+        region: "{{ regions[0] }}"
+        bucket: "{{ agents.bucket.name }}"
+        mode: delobj
+        object: "{{ item }}"
+      loop: "{{ bucket_list.s3_keys }}"
+      when:
+        - "'s3_keys' in bucket_list"
+        - item != lambda.zip

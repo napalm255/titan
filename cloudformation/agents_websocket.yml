@@ -3,15 +3,27 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Titan Agents WebSocket API
 
 Parameters:
-  lambdaConnectName:
+  lambdaWebSocketName:
     Type: String
-    Description: Name of the Lambda function for the $connect route
-  lambdaDisconnectName:
+    Description: Lambda WebSocket function name
+  lambdaWebSocketExecutionRoleName:
     Type: String
-    Description: Name of the Lambda function for the $disconnect route
-  lambdaMessageName:
+    Description: Lambda WebSocket execution role name
+  lambdaAuthorizerName:
     Type: String
-    Description: Name of the Lambda function for the $default route
+    Description: Lambda Authorizer function name
+  lambdaAuthorizerExecutionRoleName:
+    Type: String
+    Description: Lambda Authorizer execution role name
+  lambdaBucket:
+    Type: String
+    Description: S3 bucket name
+  lambdaKey:
+    Type: String
+    Description: S3 key
+  dynamoDbTable:
+    Type: String
+    Description: DynamoDB table name
 
 Resources:
   webSocketApi:
@@ -21,12 +33,44 @@ Resources:
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: "$request.body.action"
 
+  webSocketApiAuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: webSocketApiPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt lambdaAuthorizer.Arn
+
+  webSocketApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      Name: titan-websocket-authorizer
+      ApiId: !Ref webSocketApi
+      AuthorizerType: REQUEST
+      IdentitySource:
+        - route.request.header.Auth
+      AuthorizerUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaAuthorizer.Arn}/invocations
+      AuthorizerCredentialsArn: !GetAtt webSocketApiAuthorizerRole.Arn
+
   webSocketRouteConnect:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref webSocketApi
       RouteKey: $connect
-      AuthorizationType: NONE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref webSocketApiAuthorizer
       Target: !Sub "integrations/${webSocketIntegrationConnect}"
 
   webSocketIntegrationConnect:
@@ -34,7 +78,7 @@ Resources:
     Properties:
       ApiId: !Ref webSocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionConnect.Arn}/invocations
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaWebSocket.Arn}/invocations
 
   webSocketRouteDisconnect:
     Type: AWS::ApiGatewayV2::Route
@@ -42,7 +86,14 @@ Resources:
       ApiId: !Ref webSocketApi
       RouteKey: $disconnect
       AuthorizationType: NONE
-      Target: !Sub "integrations/${webSocketIntegrationDisconnect}"
+      Target: !Sub integrations/${webSocketIntegrationDisconnect}
+
+  webSocketIntegrationDisconnect:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref webSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaWebSocket.Arn}/invocations
 
   webSocketRouteMessage:
     Type: AWS::ApiGatewayV2::Route
@@ -50,42 +101,36 @@ Resources:
       ApiId: !Ref webSocketApi
       RouteKey: $default
       AuthorizationType: NONE
-      Target: !Sub "integrations/${webSocketIntegrationMessage}"
-
-  webSocketIntegrationDisconnect:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref webSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionDisconnect.Arn}/invocations"
+      Target: !Sub integrations/${webSocketIntegrationMessage}
 
   webSocketIntegrationMessage:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref webSocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionMessage.Arn}/invocations"
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaWebSocket.Arn}/invocations
 
-  apiGatewayDeployment:
+  webSocketApiDeployment:
     Type: AWS::ApiGatewayV2::Deployment
     DependsOn:
+      - webSocketApiAuthorizer
       - webSocketRouteConnect
       - webSocketRouteDisconnect
       - webSocketRouteMessage
     Properties:
       ApiId: !Ref webSocketApi
 
-  apiGatewayStage:
+  webSocketApiGatewayStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
       ApiId: !Ref webSocketApi
       StageName: prod
-      DeploymentId: !Ref apiGatewayDeployment
+      DeploymentId: !Ref webSocketApiDeployment
 
-  lambdaExecutionRole:
+  lambdaWebSocketExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: lambdaExecutionRole
+      RoleName: !Ref lambdaWebSocketExecutionRoleName
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -93,6 +138,8 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: lambdaExecutionPolicy
           PolicyDocument:
@@ -100,58 +147,98 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - lambda:InvokeFunction
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
                 Resource: "*"
 
-  lambdaFunctionConnect:
-    Type: AWS::Lambda::Function
+  lambdaWebSocketPermission:
+    Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref lambdaConnectName
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt lambdaExecutionRole.Arn
-      Runtime: python3.12
-      Code:
-        ZipFile: |
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': 'Connected'
-              }
+      FunctionName: !GetAtt lambdaWebSocket.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${webSocketApi.ApiId}/*
 
-  lambdaFunctionDisconnect:
-    Type: AWS::Lambda::Function
+  lambdaWebSocketLogGroup:
+    Type: AWS::Logs::LogGroup
     Properties:
-      FunctionName: !Ref lambdaDisconnectName
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt lambdaExecutionRole.Arn
-      Runtime: python3.12
-      Code:
-        ZipFile: |
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': 'Disconnected'
-              }
+      LogGroupName: !Sub /aws/lambda/${lambdaWebSocketName}
 
-  lambdaFunctionMessage:
+  lambdaWebSocket:
+    DependsOn:
+      - lambdaWebSocketLogGroup
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Ref lambdaMessageName
-      Handler: lambda_function.lambda_handler
-      Role: !GetAtt lambdaExecutionRole.Arn
+      FunctionName: !Ref lambdaWebSocketName
+      Description: Titan Agent WebSocket
+      Handler: websocket.lambda_handler
       Runtime: python3.12
+      Role: !GetAtt lambdaWebSocketExecutionRole.Arn
+      MemorySize: 256
+      Timeout: 30
       Code:
-        ZipFile: |
-          def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'body': 'Message received'
-              }
+        S3Bucket: !Ref lambdaBucket
+        S3Key: !Ref lambdaKey
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref dynamoDbTable
+
+  lambdaAuthorizerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref lambdaAuthorizerExecutionRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: lambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: "*"
+
+  lambdaAuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt lambdaAuthorizer.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${webSocketApi.ApiId}/*
+
+  lambdaAuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${lambdaAuthorizerName}
+
+  lambdaAuthorizer:
+    DependsOn:
+      - lambdaAuthorizerLogGroup
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref lambdaAuthorizerName
+      Description: Titan Agent WebSocket
+      Handler: websocket_authorizer.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt lambdaAuthorizerExecutionRole.Arn
+      MemorySize: 256
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref lambdaBucket
+        S3Key: !Ref lambdaKey
 
 Outputs:
+  webSocketApiId:
+    Description: WebSocket API ID
+    Value: !Ref webSocketApi
   webSocketApiEndpoint:
     Description: WebSocket API endpoint
     Value: !Sub wss://${webSocketApi.ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod/

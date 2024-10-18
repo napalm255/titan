@@ -1,6 +1,6 @@
 ---
 application: titan
-
+version: "{{ lookup('env', 'VERSION') | default('', true) }}"
 ansible_python_interpreter: "{{ ansible_playbook_python }}"
 
 regions:
@@ -8,6 +8,13 @@ regions:
   - us-east-2
 
 enableReplica: "true"
+
+build:
+  dir: "{{ playbook_dir }}/build"
+
+lambda:
+  dir: "{{ playbook_dir }}/titan"
+  zip: titan-{{ version }}.zip
 
 agents:
   stack:
@@ -20,7 +27,8 @@ agents:
   ddb:
     name: titan-agents-ddb-{{ label }}
     cmk: titan-agents-ddb-cmk-{{ label }}
-  websocket:
-    connect_lambda: titan-agents-websocket-connect-{{ label }}
-    disconnect_lambda: titan-agents-websocket-disconnect-{{ label }}
-    message_lambda: titan-agents-websocket-message-{{ label }}
+  lambda:
+    websocket: titan-agents-websocket-{{ label }}
+    websocket_role: titan-agents-websocket-role-{{ label }}
+    authorizer: titan-agents-websocket-authorizer-{{ label }}
+    authorizer_role: titan-agents-websocket-authorizer-role-{{ label }}
