@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 ansible = "*"
 fastapi = {extras = ["standard"], version = "*"}
+boto3 = "*"
 
 [dev-packages]
 

@@ -1,0 +1,81 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Titan Agents DynamoDB Global Table CMK
+
+Parameters:
+  keyAlias:
+    Type: String
+    Description: The alias of the KMS key to use for encryption
+    Default: titan-agents-ddb-cmk
+
+Resources:
+  kmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Titan Agents DynamoDB Global Table
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: "key-default"
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: "Allow use of the key"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "kms:Encrypt"
+              - "kms:Decrypt"
+              - "kms:ReEncrypt*"
+              - "kms:GenerateDataKey*"
+              - "kms:DescribeKey"
+            Resource: "*"
+          - Sid: "Allow attachment of persistent resources"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "kms:CreateGrant"
+              - "kms:ListGrants"
+              - "kms:RevokeGrant"
+            Resource: "*"
+          - Sid: "Allow access to the key policy"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "kms:GetKeyPolicy"
+              - "kms:PutKeyPolicy"
+            Resource: "*"
+          - Sid: "Allow key deletion"
+            Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "kms:ScheduleKeyDeletion"
+              - "kms:CancelKeyDeletion"
+            Resource: "*"
+
+  kmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${keyAlias}
+      TargetKeyId: !Ref kmsKey
+
+Outputs:
+  keyArn:
+    Description: The ARN of the KMS key
+    Value: !GetAtt kmsKey.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-KeyArn
+  keyAlias:
+    Description: The alias of the KMS key
+    Value: !Ref kmsKeyAlias
+    Export:
+      Name: !Sub ${AWS::StackName}-KeyAlias

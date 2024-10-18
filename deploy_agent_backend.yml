@@ -1,0 +1,55 @@
+---
+- hosts: "{{ stage }}"
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: deploy bucket
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ agents.stack.bucket }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          bucketName: "{{ agents.bucket.name }}"
+        tags:
+          application: "{{ application }}"
+
+    - name: deploy cmk to {{ regions[0] }}
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ agents.stack.cmk }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          keyAlias: "{{ agents.ddb.cmk }}"
+        tags:
+          application: "{{ application }}"
+
+    - name: deploy cmk to {{ regions[1] }}
+      amazon.aws.cloudformation:
+        region: "{{ regions[1] }}"
+        stack_name: "{{ agents.stack.cmk }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          keyAlias: "{{ agents.ddb.cmk }}"
+        tags:
+          application: "{{ application }}"
+      when: enableReplicas | bool
+
+    - name: deploy ddb table
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ agents.stack.ddb }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          tableName: "{{ agents.ddb.name}}"
+          keyAlias: "{{ agents.ddb.cmk }}"
+        tags:
+          application: "{{ application }}"
