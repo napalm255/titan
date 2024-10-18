@@ -1,5 +1,6 @@
 ---
-- hosts: "{{ stage }}"
+- name: deploy agent backend
+  hosts: "{{ stage }}"
   connection: local
   gather_facts: false
 
@@ -8,16 +9,29 @@
       ansible.builtin.command: date +%Y%m%d_%H%M%S
       register: date
       when: not version
+      changed_when: false
 
     - name: set version
       ansible.builtin.set_fact:
         version: "{{ date.stdout }}"
       when: not version
 
+    - name: deploy eventbus
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.eventbus }}"
+        template_body: "{{ lookup('file', 'cloudformation/eventbus.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          eventBusName: "{{ eventbus.name }}"
+        tags:
+          application: "{{ application }}"
+
     - name: deploy cmk to {{ regions[0] }}
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
-        stack_name: "{{ agents.stack.cmk }}"
+        stack_name: "{{ stacks.cmk }}"
         template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
         state: present
         on_create_failure: DELETE
@@ -30,7 +44,7 @@
     - name: deploy cmk to {{ regions[1] }}
       amazon.aws.cloudformation:
         region: "{{ regions[1] }}"
-        stack_name: "{{ agents.stack.cmk }}"
+        stack_name: "{{ stacks.cmk }}"
         template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
         state: present
         on_create_failure: DELETE
@@ -44,7 +58,7 @@
     - name: deploy ddb table
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
-        stack_name: "{{ agents.stack.ddb }}"
+        stack_name: "{{ stacks.ddb }}"
         template_body: "{{ lookup('file', 'cloudformation/agents_ddb.yml') }}"
         state: present
         on_create_failure: DELETE
@@ -58,7 +72,7 @@
     - name: deploy bucket
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
-        stack_name: "{{ agents.stack.bucket }}"
+        stack_name: "{{ stacks.bucket }}"
         template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
         state: present
         on_create_failure: DELETE
@@ -111,7 +125,7 @@
     - name: deploy websocket api
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
-        stack_name: "{{ agents.stack.websocket }}"
+        stack_name: "{{ stacks.websocket }}"
         template_body: "{{ lookup('file', 'cloudformation/agents_websocket.yml') }}"
         state: present
         on_create_failure: DELETE
@@ -135,6 +149,22 @@
       environment:
         AWS_DEFAULT_REGION: "{{ regions[0] }}"
 
+    - name: deploy sqs
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.sqs }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_sqs.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          queueName: "{{ agents.sqs.name }}"
+          lambdaSqsName: "{{ agents.lambda.sqs }}"
+          lambdaBucket: "{{ agents.bucket.name }}"
+          lambdaKey: "{{ lambda.zip }}"
+          webSocketConnectionsUrl: "{{ websocket_stack.stack_outputs.webSocketConnectionsUrl}}"
+        tags:
+          application: "{{ application }}"
+
     - name: delete old contents in bucket
       amazon.aws.s3_object:
         region: "{{ regions[0] }}"
@@ -149,4 +179,4 @@
     - name: display connection details
       debug:
         msg: |
-          {{ websocket_stack.stack_outputs.webSocketApiEndpoint }}
+          {{ websocket_stack.stack_outputs.webSocketUrl }}

@@ -1,0 +1,15 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Titan Event Bus
+
+Parameters:
+  eventBusName:
+    Type: String
+    Description: The name of the event bus
+
+Resources:
+  eventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Ref eventBusName
+      Description: Titan Event Bus

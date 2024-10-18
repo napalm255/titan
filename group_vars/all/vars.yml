@@ -16,19 +16,28 @@ lambda:
   dir: "{{ playbook_dir }}/titan"
   zip: titan-{{ version }}.zip
 
+stacks:
+  eventbus: titan-eventbus-{{ label }}
+  bucket: titan-agents-bucket-{{ label }}
+  cmk: titan-agents-ddb-cmk-{{ label }}
+  ddb: titan-agents-ddb-{{ label }}
+  websocket: titan-agents-websocket-{{ label }}
+  sqs: titan-agents-sqs-{{ label }}
+
+eventbus:
+  name: titan-eventbus-{{ label }}
+
 agents:
-  stack:
-    bucket: titan-agents-bucket-{{ label }}
-    cmk: titan-agents-ddb-cmk-{{ label }}
-    ddb: titan-agents-ddb-{{ label }}
-    websocket: titan-agents-websocket-{{ label }}
   bucket:
     name: titan-agents-bucket-{{ label }}
   ddb:
     name: titan-agents-ddb-{{ label }}
     cmk: titan-agents-ddb-cmk-{{ label }}
+  sqs:
+    name: titan-agents-sqs-{{ label }}
   lambda:
     websocket: titan-agents-websocket-{{ label }}
     websocket_role: titan-agents-websocket-role-{{ label }}
     authorizer: titan-agents-websocket-authorizer-{{ label }}
     authorizer_role: titan-agents-websocket-authorizer-role-{{ label }}
+    sqs: titan-agents-sqs-{{ label }}

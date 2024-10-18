@@ -1,5 +1,5 @@
 """
-Titan Websocker Authorizer.
+Titan Agent WebSocket Authorizer.
 """
 
 import json

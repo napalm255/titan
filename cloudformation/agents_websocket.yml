@@ -241,7 +241,9 @@ Outputs:
   webSocketApiId:
     Description: WebSocket API ID
     Value: !Ref webSocketApi
-  webSocketApiEndpoint:
-    Description: WebSocket API endpoint
+  webSocketUrl:
+    Description: WebSocket Url
     Value: !Sub wss://${webSocketApi.ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod/
-
+  webSocketConnectionsUrl:
+    Description: WebSocket Connections Url
+    Value: !Sub https://${webSocketApi.ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod/
