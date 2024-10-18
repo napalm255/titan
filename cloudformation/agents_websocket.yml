@@ -1,0 +1,161 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Titan Agents WebSocket API
+
+Parameters:
+  lambdaConnectName:
+    Type: String
+    Description: Name of the Lambda function for the $connect route
+  lambdaDisconnectName:
+    Type: String
+    Description: Name of the Lambda function for the $disconnect route
+  lambdaMessageName:
+    Type: String
+    Description: Name of the Lambda function for the $default route
+
+Resources:
+  webSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: titanWebSocketApi
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  webSocketRouteConnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref webSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${webSocketIntegrationConnect}"
+
+  webSocketIntegrationConnect:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref webSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionConnect.Arn}/invocations
+      PayloadFormatVersion: '2.0'
+
+  webSocketRouteDisconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref webSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${webSocketIntegrationDisconnect}"
+
+  webSocketRouteMessage:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref webSocketApi
+      RouteKey: $default
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${webSocketIntegrationMessage}"
+
+  webSocketIntegrationDisconnect:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref webSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionDisconnect.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  webSocketIntegrationMessage:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref webSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaFunctionMessage.Arn}/invocations"
+      PayloadFormatVersion: '2.0'
+
+  lambdaFunctionConnect:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref lambdaConnectName
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt lambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Connected'
+              }
+
+  lambdaFunctionDisconnect:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref lambdaDisconnectName
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt lambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Disconnected'
+              }
+
+  lambdaFunctionMessage:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref lambdaMessageName
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt lambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Message received'
+              }
+
+  lambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: lambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  apiGatewayDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - webSocketRouteConnect
+      - webSocketRouteDisconnect
+      - webSocketRouteMessage
+    Properties:
+      ApiId: !Ref webSocketApi
+
+  apiGatewayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref webSocketApi
+      StageName: prod
+      DeploymentId: !Ref apiGatewayDeployment
+
+Outputs:
+  webSocketApiEndpoint:
+    Description: WebSocket API endpoint
+    Value: !Sub wss://${webSocketApi.ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod/
+

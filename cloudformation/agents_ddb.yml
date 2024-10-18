@@ -3,16 +3,20 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Titan Agents DynamoDB Global Table
 
 Parameters:
+  tableName:
+    Type: String
+    Default: titan-agents-table
+    Description: DynamoDB Table Name
+  keyAlias:
+    Type: String
+    Description: KMS Key Alias for DynamoDB Encryption
   enableReplica:
     Type: String
     Default: "false"
     AllowedValues:
       - "true"
       - "false"
-    Description: "Enable DynamoDB Global Table Replica"
-  kmsKeyAlias:
-    Type: String
-    Description: "KMS Key Alias for DynamoDB Encryption"
+    Description: Enable DynamoDB Global Table Replica
 
 Conditions:
   enableReplica: !Equals [!Ref enableReplica, "true"]
@@ -21,7 +25,7 @@ Resources:
   dynamoDbGlobalTable:
     Type: AWS::DynamoDB::GlobalTable
     Properties:
-      TableName: titan-agents-table
+      TableName: !Ref tableName
       BillingMode: PAY_PER_REQUEST
       KeySchema:
         - AttributeName: connection_id
@@ -31,13 +35,16 @@ Resources:
           AttributeType: S
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
       Replicas:
         - Region: us-east-1
           PointInTimeRecoverySpecification:
             PointInTimeRecoveryEnabled: true
           TableClass: STANDARD
           SSESpecification:
-            KMSMasterKeyId: !Sub arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${kmsKeyAlias}
+            KMSMasterKeyId: !Sub arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${keyAlias}
         - !If
           - enableReplica
           - Region: us-east-2
@@ -45,7 +52,7 @@ Resources:
               PointInTimeRecoveryEnabled: true
             TableClass: STANDARD
             SSESpecification:
-              KMSMasterKeyId: !Sub arn:aws:kms:us-east-2:${AWS::AccountId}:alias/${kmsKeyAlias}
+              KMSMasterKeyId: !Sub arn:aws:kms:us-east-2:${AWS::AccountId}:alias/${keyAlias}
           - !Ref "AWS::NoValue"
     UpdateReplacePolicy: Delete
     DeletionPolicy: Delete
