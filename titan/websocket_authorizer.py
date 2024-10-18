@@ -76,6 +76,24 @@ def check_token(token):
     return False
 
 
+def check_query_string_parameters(query_string_parameters):
+    """
+    Check if query string parameters are valid.
+
+    :param query_string_parameters: Query string parameters.
+    :return: True if query string parameters are valid, False otherwise.
+    """
+    required_parameters = [
+        'host',
+        'os',
+        'labels'
+    ]
+    for param in required_parameters:
+        if param not in query_string_parameters:
+            return False
+    return True
+
+
 def lambda_handler(event, context):
     """
     Lambda handler.
@@ -87,13 +105,16 @@ def lambda_handler(event, context):
     # pylint: disable=unused-argument
     logger.info(event)
 
-    if check_token(event['headers']['Auth']):
+    token_valid = check_token(event['headers']['Auth'])
+    params_valid= check_query_string_parameters(event['queryStringParameters'])
+
+    if token_valid and params_valid:
         response = generate_allow('titan-agent', event['methodArn'])
         logger.info(response)
         logger.info('authorized')
-        return json.loads(response)
+    else:
+        response = generate_deny('titan-agent', event['methodArn'])
+        logger.info(response)
+        logger.error('unauthorized')
 
-    response = generate_deny('titan-agent', event['methodArn'])
-    logger.info(response)
-    logger.error('unauthorized')
     return json.loads(response)
