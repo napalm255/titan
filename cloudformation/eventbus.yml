@@ -13,3 +13,11 @@ Resources:
     Properties:
       Name: !Ref eventBusName
       Description: Titan Event Bus
+
+Outputs:
+  eventBusArn:
+    Description: The ARN of the event bus
+    Value: !GetAtt eventBus.Arn
+  eventBusName:
+    Description: The name of the event bus
+    Value: !Ref eventBusName

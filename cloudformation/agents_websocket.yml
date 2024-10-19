@@ -24,6 +24,9 @@ Parameters:
   dynamoDbTable:
     Type: String
     Description: DynamoDB table name
+  eventBusName:
+    Type: String
+    Description: Event bus name
 
 Resources:
   webSocketApi:
@@ -205,8 +208,13 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - events:PuteEvents
                   - dynamodb:GetItem
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${eventBusName}
 
   lambdaAuthorizerPermission:
     Type: AWS::Lambda::Permission
@@ -228,7 +236,7 @@ Resources:
     Properties:
       FunctionName: !Ref lambdaAuthorizerName
       Description: Titan Agent WebSocket
-      Handler: websocket_authorizer.lambda_handler
+      Handler: authorizer.lambda_handler
       Runtime: python3.12
       Role: !GetAtt lambdaAuthorizerExecutionRole.Arn
       MemorySize: 256
@@ -236,6 +244,9 @@ Resources:
       Code:
         S3Bucket: !Ref lambdaBucket
         S3Key: !Ref lambdaKey
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref eventBusName
 
 Outputs:
   webSocketApiId:

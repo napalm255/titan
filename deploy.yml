@@ -16,71 +16,6 @@
         version: "{{ date.stdout }}"
       when: not version
 
-    - name: deploy eventbus
-      amazon.aws.cloudformation:
-        region: "{{ regions[0] }}"
-        stack_name: "{{ stacks.eventbus }}"
-        template_body: "{{ lookup('file', 'cloudformation/eventbus.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          eventBusName: "{{ eventbus.name }}"
-        tags:
-          application: "{{ application }}"
-
-    - name: deploy cmk to {{ regions[0] }}
-      amazon.aws.cloudformation:
-        region: "{{ regions[0] }}"
-        stack_name: "{{ stacks.cmk }}"
-        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          keyAlias: "{{ agents.ddb.cmk }}"
-          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
-        tags:
-          application: "{{ application }}"
-
-    - name: deploy cmk to {{ regions[1] }}
-      amazon.aws.cloudformation:
-        region: "{{ regions[1] }}"
-        stack_name: "{{ stacks.cmk }}"
-        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          keyAlias: "{{ agents.ddb.cmk }}"
-          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
-        tags:
-          application: "{{ application }}"
-      when: enableReplica | bool
-
-    - name: deploy ddb table
-      amazon.aws.cloudformation:
-        region: "{{ regions[0] }}"
-        stack_name: "{{ stacks.ddb }}"
-        template_body: "{{ lookup('file', 'cloudformation/agents_ddb.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          tableName: "{{ agents.ddb.name}}"
-          keyAlias: "{{ agents.ddb.cmk }}"
-          enableReplica: "{{ enableReplica }}"
-        tags:
-          application: "{{ application }}"
-
-    - name: deploy bucket
-      amazon.aws.cloudformation:
-        region: "{{ regions[0] }}"
-        stack_name: "{{ stacks.bucket }}"
-        template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
-        state: present
-        on_create_failure: DELETE
-        template_parameters:
-          bucketName: "{{ agents.bucket.name }}"
-        tags:
-          application: "{{ application }}"
-
     - name: reset build directory
       ansible.builtin.file:
         dest: "{{ build.dir }}"
@@ -99,11 +34,41 @@
         content: "{{ version }}"
         dest: "{{ build.dir }}/VERSION"
 
+    - name: generate requirements file
+      ansible.builtin.command:
+        cmd: pipenv requirements
+        chdir: "{{ build.dir }}"
+      register: python_requirements
+
+    - name: create requirements file
+      ansible.builtin.copy:
+        content: "{{ python_requirements.stdout_lines[1:] | join('\n') }}"
+        dest: "{{ build.dir }}/requirements.txt"
+
+    - name: download requirements
+      ansible.builtin.pip:
+        chdir: "{{ build.dir }}"
+        requirements: "{{ build.dir }}/requirements.txt"
+        extra_args: --target {{ build.dir }}
+        state: latest
+
     - name: package lambda
       community.general.archive:
         path: "{{ build.dir }}/*"
         dest: "{{ build.dir }}/{{ lambda.zip }}"
         format: zip
+
+    - name: deploy bucket
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.bucket }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_bucket.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          bucketName: "{{ agents.bucket.name }}"
+        tags:
+          application: "{{ application }}"
 
     - name: list contents in bucket
       amazon.aws.s3_object:
@@ -122,7 +87,61 @@
         object: "{{ lambda.zip }}"
         encrypt: true
 
-    - name: deploy websocket api
+    - name: deploy eventbus
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.eventbus }}"
+        template_body: "{{ lookup('file', 'cloudformation/eventbus.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          eventBusName: "{{ eventbus.name }}"
+        tags:
+          application: "{{ application }}"
+      register: eventbus_stack
+
+    - name: deploy cmk for dynamodb to {{ regions[0] }}
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.cmk }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          keyAlias: "{{ agents.ddb.cmk }}"
+          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
+        tags:
+          application: "{{ application }}"
+
+    - name: deploy cmk for dynamodb to {{ regions[1] }}
+      amazon.aws.cloudformation:
+        region: "{{ regions[1] }}"
+        stack_name: "{{ stacks.cmk }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb_cmk.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          keyAlias: "{{ agents.ddb.cmk }}"
+          lambdaRoleName: "{{ agents.lambda.websocket_role }}"
+        tags:
+          application: "{{ application }}"
+      when: enableReplica | bool
+
+    - name: deploy dynamodb global table
+      amazon.aws.cloudformation:
+        region: "{{ regions[0] }}"
+        stack_name: "{{ stacks.ddb }}"
+        template_body: "{{ lookup('file', 'cloudformation/agents_ddb.yml') }}"
+        state: present
+        on_create_failure: DELETE
+        template_parameters:
+          tableName: "{{ agents.ddb.name}}"
+          keyAlias: "{{ agents.ddb.cmk }}"
+          enableReplica: "{{ enableReplica }}"
+        tags:
+          application: "{{ application }}"
+
+    - name: deploy agents websocket api
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
         stack_name: "{{ stacks.websocket }}"
@@ -137,11 +156,12 @@
           lambdaBucket: "{{ agents.bucket.name }}"
           lambdaKey: "{{ lambda.zip }}"
           dynamoDbTable: "{{ agents.ddb.name }}"
+          eventBusName: "{{ eventbus.name }}"
         tags:
           application: "{{ application }}"
       register: websocket_stack
 
-    - name: create deployment for api gateway
+    - name: create deployment for agents websocket api
       ansible.builtin.command: >
         aws apigatewayv2 create-deployment
         --api-id "{{ websocket_stack.stack_outputs.webSocketApiId }}"
@@ -149,7 +169,7 @@
       environment:
         AWS_DEFAULT_REGION: "{{ regions[0] }}"
 
-    - name: deploy sqs
+    - name: deploy agents sqs
       amazon.aws.cloudformation:
         region: "{{ regions[0] }}"
         stack_name: "{{ stacks.sqs }}"

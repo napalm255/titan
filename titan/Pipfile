@@ -4,11 +4,11 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-ansible = "*"
 boto3 = "*"
+pydantic = "*"
 
 [dev-packages]
-cfn-lint = "*"
+pylint = "*"
 
 [requires]
 python_version = "3.12"

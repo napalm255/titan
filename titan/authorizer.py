@@ -4,6 +4,7 @@ Titan Agent WebSocket Authorizer.
 
 import json
 import logging
+from utils.event import Event, EventBridgeHelper
 
 logger = logging.getLogger()
 logger.setLevel("INFO")
@@ -112,6 +113,15 @@ def lambda_handler(event, context):
         response = generate_allow('titan-agent', event['methodArn'])
         logger.info(response)
         logger.info('authorized')
+        event = EventBridgeHelper().send(
+                  Event(
+                    source='titan-authorizer',
+                    detail_type='Authorization',
+                    detail={
+                        'status': 'authorized',
+                    }
+                  )
+                )
     else:
         response = generate_deny('titan-agent', event['methodArn'])
         logger.info(response)
