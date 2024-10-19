@@ -1,111 +1,162 @@
 """
-Pipeline Execution Agent
-
-The agent is responsible for the following actions:
-    - Dynamically generating an agent ID based on system hostname and initial timestamp
-    - Register the agent via an AWS Event Bridge message
-    - Deregister the agent on exit via an AWS Event Bridge message
-    - Listen for events on AWS SQS sent via Event Bridge
-    - Execute the defined task (in BASH) in an isolated shell
-    - Capture the task output in realtime to cloudwatch logs
+Titan Agent.
 """
+
 import os
+import sh
 import sys
-import time
 import json
 import logging
-import subprocess
+import asyncio
 import threading
-import traceback
-from datetime import datetime
-from typing import Dict, Any
-from botocore.exceptions import ClientError
-from botocore.config import Config
-import boto3
-import boto3.session
-import botocore
-import botocore.exceptions
+import subprocess
+import urllib.parse
+from typing import Optional
+import websockets
+import watchtower
 
-# Set up logging
+# Setup logger for CloudWatch
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+cloudwatch_handler = watchtower.CloudWatchLogHandler(
+    log_group="/titan/agents",
+    create_log_group=True,
+    create_log_stream=True,
+    use_queues=True,
+    send_interval=5,
+    max_batch_count=5
+)
+logger = logging.getLogger('titan-agent')
+logger.addHandler(cloudwatch_handler)
 
-# Constants
-AGENT_ID = f"{os.uname().nodename}-{int(time.time())}"
-SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL")
-REGION = os.environ.get("REGION")
-TASK_TIMEOUT = int(os.environ.get("TASK_TIMEOUT", 60))
-MAX_RETRIES = int(os.environ.get("MAX_RETRIES", 3))
-AWS_CONFIG = Config(region_name=REGION)
-AWS_SESSION = boto3.session.Session(region_name=REGION)
-SQS_CLIENT = AWS_SESSION.client("sqs", config=AWS_CONFIG)
-EVENTS_CLIENT = AWS_SESSION.client("events", config=AWS_CONFIG)
 
-def register_agent(agent_id: str) -> None:
+class JobAgent:
     """
-    Register the agent with the event bridge
+    Titan Job Agent.
+
+    This agent connects to the Titan WebSocket server and listens for job messages.
+    It can execute shell commands and terminate the current job.
     """
+    # pylint: disable=logging-fstring-interpolation
+
+    def __init__(self, websocket_url: str, token: str):
+        """
+        Initialize the Job Agent.
+
+        :param websocket_url: WebSocket URL to connect to.
+        :param token: Authorization token.
+        """
+        self.websocket_url = websocket_url
+        self.current_process: Optional[subprocess.Popen] = None
+        self.job_lock = threading.Lock()
+        self.headers = {
+            "Auth": token
+        }
+        self.query_params = {
+            "os": os.name,
+            "host": os.uname().nodename,
+            "labels": "default"
+        }
+
+    def url(self):
+        """
+        Construct the WebSocket URL with query parameters.
+        """
+        return f"{self.websocket_url}?{urllib.parse.urlencode(self.query_params)}"
+
+    async def connect(self):
+        """
+        Connect to the WebSocket server.
+        """
+        async with websockets.connect(self.url(), extra_headers=self.headers) as ws:
+            logger.info("Connected to WebSocket")
+            await self.listen(ws)
+
+    async def listen(self, ws):
+        """
+        Listen for incoming messages from the WebSocket server.
+
+        :param ws: WebSocket connection.
+        """
+        while True:
+            try:
+                message = await ws.recv()
+                job_message = json.loads(message)
+                logger.info(f"Received message: {job_message}")
+
+                if job_message.get("action") == "execute":
+                    await self.handle_execute(job_message["shell_command"])
+
+                elif job_message.get("action") == "terminate":
+                    await self.handle_terminate()
+
+            except websockets.ConnectionClosedError:
+                logger.error("WebSocket connection closed, attempting to reconnect...")
+                await asyncio.sleep(5)
+                await self.connect()
+
+    async def handle_execute(self, shell_command: str):
+        """
+        Execute a shell command.
+
+        :param shell_command: Shell command to execute.
+        """
+        if self.job_lock.locked():
+            logger.warning("A job is already running, skipping execution")
+            return
+
+        def execute():
+            try:
+                for line in sh.Command(shell_command)(_iter=True, _err_to_out=True):
+                    logger.info(line.strip())
+                logger.info("Job completed successfully with return code: 0")
+            except sh.ErrorReturnCode as error:
+                logger.error(f"Job failed with return code: {error.exit_code}")
+
+        def execute_job():
+            logger.info(f"Executing shell command: {shell_command}")
+            with self.job_lock:
+                self.current_process = subprocess.Popen(
+                    shell_command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                for line in self.current_process.stdout:
+                    logger.info(line.decode().strip())
+
+                self.current_process.wait()
+                logger.info(f"Job completed with return code: {self.current_process.returncode}")
+                for handler in logger.handlers:
+                    handler.flush()
+                    handler.close()
+
+        # threading.Thread(target=execute_job).start()
+        threading.Thread(target=execute).start()
+
+    async def handle_terminate(self):
+        """
+        Terminate the current job.
+        """
+        if self.job_lock.locked() and self.current_process:
+            logger.info("Terminating the current job")
+            self.current_process.terminate()
+
+    def start(self):
+        """
+        Start the agent.
+        """
+        logger.info("Starting the agent...")
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.connect())
+
+# Example usage
+if __name__ == "__main__":
     try:
-        response = EVENTS_CLIENT.put_events(
-            Entries=[
-                {
-                    "Detail": json.dumps({"agent_id": agent_id}),
-                    "DetailType": "AgentRegistration",
-                    "EventBusName": "default",
-                    "Source": "agent"
-                }
-            ]
+        agent = JobAgent(
+            websocket_url = os.environ.get("WEBSOCKET_URL"),
+            token = os.environ.get("WEBSOCKET_TOKEN")
         )
-        logger.info(f"Agent {agent_id} registered")
-    except ClientError as e:
-        logger.error(f"Error registering agent {agent_id}: {e}")
-        sys.exit(1)
-
-def deregister_agent(agent_id: str) -> None:
-    """
-    Deregister the agent with the event bridge
-    """
-    try:
-        response = EVENTS_CLIENT.put_events(
-            Entries=[
-                {
-                    "Detail": json.dumps({"agent_id": agent_id}),
-                    "DetailType": "AgentDeregistration",
-                    "EventBusName": "default",
-                    "Source": "agent"
-                }
-            ]
-        )
-        logger.info(f"Agent {agent_id} deregistered")
-    except ClientError as e:
-        logger.error(f"Error deregistering agent {agent_id}: {e}")
-        sys.exit(1)
-
-def execute_task(task: Dict[str, Any]) -> None:
-    """
-    Execute the task in an isolated shell
-    """
-    task_id = task.get("task_id")
-    command = task.get("command")
-    logger.info(f"Executing task {task_id} with command: {command}")
-    try:
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        start_time = time.time()
-        while process.poll() is None:
-            output = process.stdout.readline().decode("utf-8").strip()
-            if output:
-                logger.info(f"Task {task_id} output: {output}")
-            if time.time() - start_time > TASK_TIMEOUT:
-                logger.error(f"Task {task_id} timed out")
-                process.kill()
-                break
-        process.wait()
-        logger.info(f"Task {task_id} completed with exit code {process.returncode}")
-    except Exception as e:
-        logger.error(f"Error executing task {task_id}: {e}")
-        sys.exit(1)
+        agent.start()
+    except KeyboardInterrupt:
+        logger.info("Shutting down the agent...")
+        sys.exit(0)

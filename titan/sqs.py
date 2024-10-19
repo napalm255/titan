@@ -55,9 +55,8 @@ def lambda_handler(event, context):
     for record in event['Records']:
         message = json.loads(record['body'])
         connection_id = message['connection_id']
-        message = message['message']
 
-        send_message_to_websocket(message, connection_id)
+        send_message_to_websocket(record['body'], connection_id)
 
     return {
         'statusCode': 200,
