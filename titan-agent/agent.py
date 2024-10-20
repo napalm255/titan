@@ -2,11 +2,12 @@
 Titan Agent.
 """
 
+import logging
 import os
-import sh
 import sys
 import json
-import logging
+import uuid
+import platform
 import asyncio
 import threading
 import subprocess
@@ -14,19 +15,82 @@ import urllib.parse
 from typing import Optional
 import websockets
 import watchtower
+import sh
+from botocore.exceptions import ClientError
+
 
 # Setup logger for CloudWatch
+# pylint: disable=logging-fstring-interpolation
 logging.basicConfig(level=logging.INFO)
-cloudwatch_handler = watchtower.CloudWatchLogHandler(
-    log_group="/titan/agents",
-    create_log_group=True,
-    create_log_stream=True,
-    use_queues=True,
-    send_interval=5,
-    max_batch_count=5
-)
+try:
+    cloudwatch_handler = watchtower.CloudWatchLogHandler(
+        log_group="/titan/agents",
+        stream_name=str(uuid.uuid4()),
+        create_log_group=True,
+        create_log_stream=True,
+        use_queues=True,
+        send_interval=1,
+        max_batch_count=3
+    )
+except ClientError as error:
+    logging.error(f"Error configuring agent logging: {error}")
+    sys.exit(1)
 logger = logging.getLogger('titan-agent')
 logger.addHandler(cloudwatch_handler)
+
+
+def flush_logger(_logger: logging.Logger):
+    """
+    Flush the logger handlers.
+    """
+    _logger.info("Flushing logger handlers...")
+    for _handler in _logger.handlers:
+        _handler.flush()
+        _handler.close()
+
+
+class AgentDetails:
+    """
+    Titan Agent Details.
+
+    This class provides details about the agent such as the operating system, version, and
+    hostname.
+    """
+    def __init__(self):
+        self.host: str = platform.node()
+        self.system: str = platform.system()
+        self.os: str = os.name
+        if 'ID' in platform.freedesktop_os_release():
+            self.os: str = platform.freedesktop_os_release()['ID']
+        self.version: str = platform.version()
+        if 'VERSION_ID' in platform.freedesktop_os_release():
+            self.version: str = platform.freedesktop_os_release()['VERSION_ID']
+        self.labels: str = ','.join(self.get_labels())
+
+    def get_labels(self) -> list:
+        """
+        Get the agent labels.
+        """
+        return [
+            'default'
+        ]
+
+    @property
+    def details(self) -> dict:
+        """
+        Get the agent details.
+
+        :return: Agent details.
+        """
+        return self.__dict__
+
+    def __str__(self):
+        """
+        Convert the agent details to a JSON string.
+
+        :return: JSON string.
+        """
+        return json.dumps(self.__dict__)
 
 
 class JobAgent:
@@ -36,27 +100,25 @@ class JobAgent:
     This agent connects to the Titan WebSocket server and listens for job messages.
     It can execute shell commands and terminate the current job.
     """
-    # pylint: disable=logging-fstring-interpolation
 
-    def __init__(self, websocket_url: str, token: str):
+    def __init__(self, websocket_url: str, token: str, agent_details: AgentDetails):
         """
         Initialize the Job Agent.
 
         :param websocket_url: WebSocket URL to connect to.
         :param token: Authorization token.
+        :param agent_details: Agent details.
         """
-        self.websocket_url = websocket_url
+        self.agent_details: AgentDetails = agent_details
+        self.websocket_url: str = websocket_url
         self.current_process: Optional[subprocess.Popen] = None
         self.job_lock = threading.Lock()
-        self.headers = {
+        self.headers: dict = {
             "Auth": token
         }
-        self.query_params = {
-            "os": os.name,
-            "host": os.uname().nodename,
-            "labels": "default"
-        }
+        self.query_params: dict = self.agent_details.details
 
+    @property
     def url(self):
         """
         Construct the WebSocket URL with query parameters.
@@ -67,7 +129,7 @@ class JobAgent:
         """
         Connect to the WebSocket server.
         """
-        async with websockets.connect(self.url(), extra_headers=self.headers) as ws:
+        async with websockets.connect(self.url, extra_headers=self.headers) as ws:
             logger.info("Connected to WebSocket")
             await self.listen(ws)
 
@@ -104,59 +166,78 @@ class JobAgent:
             logger.warning("A job is already running, skipping execution")
             return
 
-        def execute():
+        def job_logging():
+            """
+            Configure logging for the agent.
+            """
             try:
-                for line in sh.Command(shell_command)(_iter=True, _err_to_out=True):
-                    logger.info(line.strip())
-                logger.info("Job completed successfully with return code: 0")
-            except sh.ErrorReturnCode as error:
-                logger.error(f"Job failed with return code: {error.exit_code}")
-
-        def execute_job():
-            logger.info(f"Executing shell command: {shell_command}")
-            with self.job_lock:
-                self.current_process = subprocess.Popen(
-                    shell_command,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                cw_handler = watchtower.CloudWatchLogHandler(
+                    log_group="/titan/jobs",
+                    stream_name=str(uuid.uuid4()),
+                    create_log_group=True,
+                    create_log_stream=True,
+                    use_queues=True,
+                    send_interval=1,
+                    max_batch_count=3
                 )
-                for line in self.current_process.stdout:
-                    logger.info(line.decode().strip())
+            except ClientError as error:
+                logging.error(f"Error configuring job logging: {error}")
+                sys.exit(1)
+            job_logger = logging.getLogger('titan-job')
+            job_logger.addHandler(cw_handler)
+            logging.info("Configured job logging")
+            return job_logger
 
-                self.current_process.wait()
-                logger.info(f"Job completed with return code: {self.current_process.returncode}")
-                for handler in logger.handlers:
-                    handler.flush()
-                    handler.close()
+        def execute():
+            job_logger = job_logging()
+            with self.job_lock:
+                try:
+                    self.current_process = sh.Command(shell_command)(
+                        _iter=True,
+                        _err_to_out=True
+                    )
+                    for line in self.current_process:
+                        job_logger.info(line.strip())
+                    job_logger.info("Job completed successfully with return code: 0")
+                except sh.ErrorReturnCode as error:
+                    job_logger.error(f"Job failed with return code: {error.exit_code}")
 
-        # threading.Thread(target=execute_job).start()
+            flush_logger(job_logger)
+
         threading.Thread(target=execute).start()
 
     async def handle_terminate(self):
         """
         Terminate the current job.
         """
-        if self.job_lock.locked() and self.current_process:
+        logger.info("Received terminate message")
+        logger.info(self.job_lock.locked())
+        logger.info(self.current_process.process)
+        if self.job_lock.locked() and self.current_process.process:
             logger.info("Terminating the current job")
-            self.current_process.terminate()
+            self.current_process.process.terminate()
 
     def start(self):
         """
         Start the agent.
         """
         logger.info("Starting the agent...")
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.connect())
+        asyncio.run(self.connect())
 
-# Example usage
+
 if __name__ == "__main__":
     try:
+        details = AgentDetails()
+        logger.info(f"Agent details: {details}")
+
         agent = JobAgent(
             websocket_url = os.environ.get("WEBSOCKET_URL"),
-            token = os.environ.get("WEBSOCKET_TOKEN")
+            token = os.environ.get("WEBSOCKET_TOKEN"),
+            agent_details = details
         )
         agent.start()
     except KeyboardInterrupt:
         logger.info("Shutting down the agent...")
         sys.exit(0)
+    finally:
+        flush_logger(logger)
