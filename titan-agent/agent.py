@@ -2,6 +2,7 @@
 Titan Agent.
 """
 
+from dataclasses import dataclass
 import logging
 import os
 import sys
@@ -48,43 +49,54 @@ def flush_logger(_logger: logging.Logger):
         _handler.flush()
         _handler.close()
 
-
-class AgentDetails:
+@dataclass(repr=True, eq=True)
+class TitanAgent:
     """
-    Titan Agent Details.
+    Titan Agent Object.
 
     This class provides details about the agent such as the operating system, version, and
     hostname.
     """
-    def __init__(self):
-        self.host: str = platform.node()
-        self.system: str = platform.system()
-        self.os: str = os.name
-        if 'ID' in platform.freedesktop_os_release():
-            self.os: str = platform.freedesktop_os_release()['ID']
-        self.version: str = platform.version()
-        if 'VERSION_ID' in platform.freedesktop_os_release():
-            self.version: str = platform.freedesktop_os_release()['VERSION_ID']
-        self.labels: str = ','.join(self.get_labels())
+    host: str = platform.node()
+    system: str = platform.system()
+    os: str = None
+    version: str = None
+    labels: str = None
 
-    def get_labels(self) -> list:
+    def __post_init__(self) -> None:
+        """
+        Post initialization.
+        """
+        self.os = self.get_os()
+        self.version = self.get_version()
+        self.labels = self.get_labels()
+
+    def get_os(self) -> str:
+        """
+        Get the operating system name.
+        """
+        _os = os.name
+        if 'ID' in platform.freedesktop_os_release():
+            _os = platform.freedesktop_os_release()['ID']
+        return _os
+
+    def get_version(self) -> str:
+        """
+        Get the operating system version.
+        """
+        _version = platform.version()
+        if 'VERSION_ID' in platform.freedesktop_os_release():
+            _version = platform.freedesktop_os_release()['VERSION_ID']
+        return _version
+
+    def get_labels(self) -> str:
         """
         Get the agent labels.
         """
-        return [
-            'default'
-        ]
+        labels = ['default']
+        return ','.join(labels)
 
-    @property
-    def details(self) -> dict:
-        """
-        Get the agent details.
-
-        :return: Agent details.
-        """
-        return self.__dict__
-
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Convert the agent details to a JSON string.
 
@@ -93,39 +105,39 @@ class AgentDetails:
         return json.dumps(self.__dict__)
 
 
-class JobAgent:
+class TitanWorker:
     """
-    Titan Job Agent.
+    Titan Worker.
 
     This agent connects to the Titan WebSocket server and listens for job messages.
     It can execute shell commands and terminate the current job.
     """
 
-    def __init__(self, websocket_url: str, token: str, agent_details: AgentDetails):
+    def __init__(self, websocket_url: str, token: str, agent: TitanAgent) -> None:
         """
         Initialize the Job Agent.
 
         :param websocket_url: WebSocket URL to connect to.
         :param token: Authorization token.
-        :param agent_details: Agent details.
+        :param agent: Agent.
         """
-        self.agent_details: AgentDetails = agent_details
+        self.agent: TitanAgent = agent
         self.websocket_url: str = websocket_url
         self.current_process: Optional[subprocess.Popen] = None
-        self.job_lock = threading.Lock()
+        self.job_lock: threading.Lock = threading.Lock()
         self.headers: dict = {
             "Auth": token
         }
-        self.query_params: dict = self.agent_details.details
+        self.query_params: dict = self.agent.__dict__
 
     @property
-    def url(self):
+    def url(self) -> str:
         """
         Construct the WebSocket URL with query parameters.
         """
         return f"{self.websocket_url}?{urllib.parse.urlencode(self.query_params)}"
 
-    async def connect(self):
+    async def connect(self) -> None:
         """
         Connect to the WebSocket server.
         """
@@ -133,7 +145,7 @@ class JobAgent:
             logger.info("Connected to WebSocket")
             await self.listen(ws)
 
-    async def listen(self, ws):
+    async def listen(self, ws) -> None:
         """
         Listen for incoming messages from the WebSocket server.
 
@@ -166,7 +178,7 @@ class JobAgent:
             logger.warning("A job is already running, skipping execution")
             return
 
-        def job_logging():
+        def job_logging() -> logging.Logger:
             """
             Configure logging for the agent.
             """
@@ -183,13 +195,13 @@ class JobAgent:
             except ClientError as error:
                 logging.error(f"Error configuring job logging: {error}")
                 sys.exit(1)
-            job_logger = logging.getLogger('titan-job')
+            job_logger: logging.Logger = logging.getLogger('titan-job')
             job_logger.addHandler(cw_handler)
             logging.info("Configured job logging")
             return job_logger
 
-        def execute():
-            job_logger = job_logging()
+        def execute() -> None:
+            job_logger: logging.Logger = job_logging()
             with self.job_lock:
                 try:
                     self.current_process = sh.Command(shell_command)(
@@ -206,7 +218,7 @@ class JobAgent:
 
         threading.Thread(target=execute).start()
 
-    async def handle_terminate(self):
+    async def handle_terminate(self) -> None:
         """
         Terminate the current job.
         """
@@ -217,7 +229,7 @@ class JobAgent:
             logger.info("Terminating the current job")
             self.current_process.process.terminate()
 
-    def start(self):
+    def start(self) -> None:
         """
         Start the agent.
         """
@@ -227,15 +239,15 @@ class JobAgent:
 
 if __name__ == "__main__":
     try:
-        details = AgentDetails()
-        logger.info(f"Agent details: {details}")
+        titan_agent: TitanAgent = TitanAgent()
+        logger.info(f"{titan_agent}")
 
-        agent = JobAgent(
+        worker: TitanWorker = TitanWorker(
             websocket_url = os.environ.get("WEBSOCKET_URL"),
             token = os.environ.get("WEBSOCKET_TOKEN"),
-            agent_details = details
+            agent = titan_agent
         )
-        agent.start()
+        worker.start()
     except KeyboardInterrupt:
         logger.info("Shutting down the agent...")
         sys.exit(0)
